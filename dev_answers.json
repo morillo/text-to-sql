@@ -1,0 +1,42 @@
+{
+  "q_001": {
+    "sql": "SELECT g.Name, SUM(il.UnitPrice * il.Quantity) AS TotalSales FROM Genre g JOIN Track t ON g.GenreId = t.GenreId JOIN InvoiceLine il ON t.TrackId = il.TrackId GROUP BY g.GenreId, g.Name ORDER BY TotalSales DESC LIMIT 5",
+    "answer": "Rock (826.65), Latin (382.14), Metal (261.36), Alternative & Punk (241.56), TV Shows (93.53)"
+  },
+  "q_002": {
+    "sql": "SELECT a.Title FROM Album a JOIN Artist ar ON a.ArtistId = ar.ArtistId WHERE ar.Name = 'AC/DC'",
+    "answer": "For Those About To Rock We Salute You, Let There Be Rock"
+  },
+  "q_003": {
+    "sql": "SELECT FirstName || ' ' || LastName AS Name, Email FROM Customer WHERE Country = 'Brazil'",
+    "answer": "Luís Gonçalves (luisg@embraer.com.br), Eduardo Martins (eduardo@woodstock.com.br), Alexandre Rocha (alero@uol.com.br), Roberto Almeida (roberto.almeida@riotur.gov.br), Fernanda Ramos (fernadaramos4@uol.com.br)"
+  },
+  "q_004": {
+    "sql": "SELECT mt.Name, COUNT(t.TrackId) AS TrackCount FROM MediaType mt JOIN Track t ON mt.MediaTypeId = t.MediaTypeId GROUP BY mt.MediaTypeId, mt.Name ORDER BY TrackCount DESC LIMIT 1",
+    "answer": "MPEG audio file (3034)"
+  },
+  "q_005": {
+    "sql": "SELECT e.FirstName || ' ' || e.LastName AS EmployeeName, COUNT(c.CustomerId) AS CustomerCount FROM Employee e JOIN Customer c ON e.EmployeeId = c.SupportRepId GROUP BY e.EmployeeId, e.FirstName, e.LastName ORDER BY CustomerCount DESC LIMIT 1",
+    "answer": "Jane Peacock (21)"
+  },
+  "q_006": {
+    "sql": "SELECT p.Name, COUNT(pt.TrackId) AS TrackCount FROM Playlist p JOIN PlaylistTrack pt ON p.PlaylistId = pt.PlaylistId GROUP BY p.PlaylistId, p.Name ORDER BY TrackCount DESC",
+    "answer": "Music (3290), Music (3290), 90’s Music (1477), TV Shows (213), TV Shows (213), Classical (75), Brazilian Music (39), Heavy Metal Classic (26), Classical 101 - Deep Cuts (25), Classical 101 - Next Steps (25), Classical 101 - The Basics (25), Grunge (15), Music Videos (1), On-The-Go 1 (1)"
+  },
+  "q_007": {
+    "sql": "SELECT SUM(Total) AS TotalRevenue FROM Invoice WHERE strftime('%Y', InvoiceDate) = '2021'",
+    "answer": "449.46"
+  },
+  "q_008": {
+    "sql": "SELECT BillingCountry, AVG(Total) AS AvgTotal FROM Invoice GROUP BY BillingCountry ORDER BY AvgTotal DESC",
+    "answer": "Chile (6.66), Ireland (6.52), Hungary (6.52), Czech Republic (6.45), Austria (6.09), Finland (5.95), Netherlands (5.8), India (5.79), USA (5.75), Norway (5.66), Germany (5.59), France (5.57), Sweden (5.52), Portugal (5.52), Brazil (5.43), Canada (5.43), United Kingdom (5.37), Spain (5.37), Poland (5.37), Italy (5.37), Denmark (5.37), Belgium (5.37), Australia (5.37), Argentina (5.37)"
+  },
+  "q_009": {
+    "sql": "SELECT c.FirstName || ' ' || c.LastName AS CustomerName, SUM(i.Total) AS TotalSpent, RANK() OVER (ORDER BY SUM(i.Total) DESC) AS Rank FROM Customer c JOIN Invoice i ON c.CustomerId = i.CustomerId GROUP BY c.CustomerId ORDER BY TotalSpent DESC LIMIT 5",
+    "answer": "Helena Holý (49.62, 1), Richard Cunningham (47.62, 2), Luis Rojas (46.62, 3), Ladislav Kovács (45.62, 4), Hugh O'Reilly (45.62, 4)"
+  },
+  "q_010": {
+    "sql": "SELECT a.Name, COUNT(DISTINCT t.GenreId) AS NumGenres FROM Artist a JOIN Album al ON a.ArtistId = al.ArtistId JOIN Track t ON al.AlbumId = t.AlbumId GROUP BY a.ArtistId, a.Name HAVING COUNT(DISTINCT t.GenreId) > 3 ORDER BY NumGenres DESC",
+    "answer": "Iron Maiden (4)"
+  }
+}

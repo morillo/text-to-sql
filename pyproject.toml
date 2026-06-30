@@ -1,0 +1,6 @@
+[project]
+name = "text-to-sql-agent"
+version = "0.1.0"
+description = "Model-Agnostic Text-to-SQL Agent"
+requires-python = ">=3.11"
+dependencies = ["openai", "ipython", "pandas", "pydantic", "python-dotenv"]
