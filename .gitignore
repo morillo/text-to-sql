@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables — never commit API keys
+.env
+.env.*
+!.env.example
+
+# Database (downloaded automatically by setup.sh)
+data/Chinook.db
+
+# Generated benchmark / eval output (optional, re-runnable)
+perf_report.json
+eval_results.json
+
+# Python packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# IDE Settings
+.vscode/
+
