@@ -2,34 +2,23 @@
 
 Metrics
 ───────
-We use two complementary metrics, not just one:
-
   Execution Accuracy (EX)
-      Fraction of questions where the generated SQL runs without a
-      sqlite3.Error.  A necessary but not sufficient condition for correctness.
+      Fraction of questions where the generated SQL runs without sqlite3.Error.
 
   Result Accuracy (RA)
       Fraction of questions where the result set of the generated SQL exactly
-      matches the gold-standard result set.  This is the meaningful measure of
-      correctness.  We compare result *sets* (row order– and column order–
-      independent), not SQL strings, because many correct queries look different
-      in text but produce identical data.
+      matches the gold-standard expected result set.
 
-Baseline comparison
-───────────────────
-The simple baseline prompt:
-
-    "Convert this question to SQL: {question}"
-
-…provides no schema context, no dialect hints, and no output-format guidance.
-We run this same (minimal) prompt against the same model and same questions so
-we can report a concrete before/after comparison.
+Datasets
+────────
+  - Dev set: data/dev_questions_with_answers.json (10 questions)
+  - Extended set: data/extended_questions_with_answers.json (10 additional edge-case questions)
 
 Usage
 ─────
-  python -m src.evals                        # full run with baseline comparison
-  python -m src.evals --no-baseline          # agent only, skips baseline calls
-  python -m src.evals --output results.json  # save detailed results to file
+  python -m src.evals
+  python -m src.evals --dataset extended
+  python -m src.evals --dataset all --output eval_results.json
 """
 
 import argparse
@@ -45,49 +34,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from openai import OpenAI
 
-from src.agent import TextToSQLAgent
+from src.agent import TextToSQLAgent, DEFAULT_MODEL
 from src.utils import load_db, query_db
 
 
-# ─── Baseline implementation ──────────────────────────────────────────────────
-
-# We use the same model for baseline vs. agent so the only variable is the
-# prompt engineering — this isolates the quality improvement clearly.
-
 def _run_baseline_query(question: str, client: OpenAI, model: str) -> Dict[str, Any]:
-    """
-    Execute the original baseline prompt with no schema context.
-
-    This reproduces the baseline setup:
-        "Convert this question to SQL: {question}"
-
-    Args:
-        question: Natural language question.
-        client:   OpenAI-compatible client.
-        model:    The model identifier.
-
-    Returns:
-        dict with keys: sql, usage
-    """
+    """Execute simple baseline prompt with no schema context."""
     response = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "user", "content": f"Convert this question to SQL:\n{question}"}
         ],
-        temperature=0.1,
+        temperature=0.0,
         max_tokens=512,
     )
     raw = response.choices[0].message.content or ""
-
-    # Try to extract a bare SQL statement from whatever the model returned
     sql = _extract_sql_heuristic(raw)
     return {
         "sql": sql,
         "usage": {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        } if response.usage else {},
+            "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+            "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+            "total_tokens": getattr(response.usage, "total_tokens", 0),
+        },
     }
 
 
@@ -106,16 +75,8 @@ def _extract_sql_heuristic(text: str) -> str:
     return text.strip()
 
 
-# ─── Result comparison ────────────────────────────────────────────────────────
-
 def _normalize_value(v: Any) -> Any:
-    """
-    Normalize a cell value for comparison.
-
-    - Floats are rounded to 2 decimal places to absorb floating-point drift.
-    - Strings are stripped of surrounding whitespace.
-    - Everything else is returned as-is.
-    """
+    """Normalize cell values for robust floating point and string comparison."""
     if isinstance(v, float):
         return round(v, 2)
     if isinstance(v, int):
@@ -126,20 +87,7 @@ def _normalize_value(v: Any) -> Any:
 
 
 def _row_to_value_tuple(row: Dict) -> Tuple:
-    """
-    Convert a row dict to a sorted tuple of normalized VALUES only.
-
-    We intentionally exclude column names from the comparison.  This matches
-    the standard "Execution Accuracy" (EX) metric used in text-to-SQL research
-    benchmarks such as Spider and BIRD.  Two queries that return the same data
-    with different column aliases are both considered correct — the column name
-    is a presentational choice, not a semantic one.
-
-    Example: {"TotalSales": 826.65} and {"Revenue": 826.65} are treated equal.
-
-    Values are sorted by their string representation to handle mixed types
-    (e.g. a row that contains both a str and a float column).
-    """
+    """Convert row dict to a sorted tuple of normalized values."""
     normalized = [_normalize_value(v) for v in row.values()]
     return tuple(sorted(normalized, key=str))
 
@@ -148,31 +96,16 @@ def compare_results(
     predicted: Optional[List[Dict]],
     expected: List[Dict],
 ) -> bool:
-    """
-    Compare two result sets for semantic equality (values only, standard EX metric).
-
-    Row order and column order are both ignored.  Column names are also ignored
-    — only the data values matter.  Float values are rounded to 2 decimal places
-    to absorb floating-point drift from SQLite arithmetic.
-
-    Args:
-        predicted: Rows returned by the agent's generated SQL (or None on error).
-        expected:  Gold-standard expected rows from dev_questions_with_answers.json.
-
-    Returns:
-        True if the result sets are semantically identical.
-    """
+    """Compare two result sets for semantic data equality."""
     if predicted is None:
         return False
     if len(predicted) != len(expected):
         return False
 
     pred_sorted = sorted(_row_to_value_tuple(r) for r in predicted)
-    exp_sorted  = sorted(_row_to_value_tuple(r) for r in expected)
+    exp_sorted = sorted(_row_to_value_tuple(r) for r in expected)
     return pred_sorted == exp_sorted
 
-
-# ─── Per-question evaluation ──────────────────────────────────────────────────
 
 def _eval_one(
     question: Dict,
@@ -180,86 +113,72 @@ def _eval_one(
     baseline_client: Optional[OpenAI],
     conn: sqlite3.Connection,
 ) -> Dict:
-    """
-    Evaluate a single question against the agent (and optionally the baseline).
+    q_id = question["id"]
+    text = question["question"]
+    expected = question["expected_result"]
+    tier = question.get("tier", 1)
+    gold_sql = question.get("gold_sql", "")
 
-    Args:
-        question:         One entry from dev_questions_with_answers.json.
-        agent:            Initialised TextToSQLAgent.
-        baseline_client:  OpenAI-compatible client for baseline, or None to skip.
-        conn:             Live database connection (for executing baseline SQL).
-
-    Returns:
-        dict with per-question results for both agent and baseline.
-    """
-    q_id      = question["id"]
-    text      = question["question"]
-    expected  = question["expected_result"]
-    tier      = question["tier"]
-    gold_sql  = question["gold_sql"]
-
-    # ── Agent ─────────────────────────────────────────────────────────────────
+    # Agent evaluation
     agent.reset_conversation()
     pred = agent.query(text)
 
-    agent_exec_ok   = pred["error"] is None
-    agent_result_ok = compare_results(pred["results"], expected) if agent_exec_ok else False
+    agent_exec_ok = pred["error"] is None
+    agent_result_ok = (
+        compare_results(pred["results"], expected) if agent_exec_ok else False
+    )
 
     agent_entry = {
-        "id":            q_id,
-        "tier":          tier,
-        "question":      text,
-        "gold_sql":      gold_sql,
+        "id": q_id,
+        "tier": tier,
+        "question": text,
+        "gold_sql": gold_sql,
         "predicted_sql": pred["sql"],
-        "exec_success":  agent_exec_ok,
-        "result_match":  agent_result_ok,
-        "error":         pred.get("error"),
-        "attempts":      pred.get("attempts", 1),
+        "exec_success": agent_exec_ok,
+        "result_match": agent_result_ok,
+        "error": pred.get("error"),
+        "attempts": pred.get("attempts", 1),
     }
 
-    # ── Baseline ──────────────────────────────────────────────────────────────
+    # Baseline evaluation
     baseline_entry = None
     if baseline_client is not None:
         base = _run_baseline_query(text, baseline_client, agent.model)
-
-        base_exec_ok   = False
+        base_exec_ok = False
         base_result_ok = False
-        base_error     = None
+        base_error = None
 
         if base["sql"]:
             try:
-                base_rows      = query_db(conn, base["sql"], return_as_df=False)
-                base_exec_ok   = True
+                base_rows = query_db(conn, base["sql"], return_as_df=False)
+                base_exec_ok = True
                 base_result_ok = compare_results(base_rows, expected)
             except sqlite3.Error as e:
                 base_error = str(e)
         else:
-            base_error = "No SQL extracted from baseline response"
+            base_error = "No SQL extracted"
 
         baseline_entry = {
-            "id":            q_id,
-            "tier":          tier,
+            "id": q_id,
+            "tier": tier,
             "predicted_sql": base["sql"],
-            "exec_success":  base_exec_ok,
-            "result_match":  base_result_ok,
-            "error":         base_error,
+            "exec_success": base_exec_ok,
+            "result_match": base_result_ok,
+            "error": base_error,
         }
 
     return {"agent": agent_entry, "baseline": baseline_entry}
 
 
-# ─── Reporting ────────────────────────────────────────────────────────────────
-
 def _print_summary(agent_rows: List[Dict], baseline_rows: Optional[List[Dict]]) -> None:
-    """Print a formatted evaluation summary table."""
     n = len(agent_rows)
-    a_exec  = sum(r["exec_success"]  for r in agent_rows) / n
-    a_res   = sum(r["result_match"]  for r in agent_rows) / n
+    a_exec = sum(r["exec_success"] for r in agent_rows) / n
+    a_res = sum(r["result_match"] for r in agent_rows) / n
 
     has_baseline = baseline_rows is not None and len(baseline_rows) > 0
     if has_baseline:
-        b_exec = sum(r["exec_success"]  for r in baseline_rows) / n
-        b_res  = sum(r["result_match"]  for r in baseline_rows) / n
+        b_exec = sum(r["exec_success"] for r in baseline_rows) / n
+        b_res = sum(r["result_match"] for r in baseline_rows) / n
 
     width = 66 if has_baseline else 46
     print()
@@ -280,10 +199,9 @@ def _print_summary(agent_rows: List[Dict], baseline_rows: Optional[List[Dict]]) 
             line += f"  {b_val:>7.1%}  {delta:>+6.1%}"
         print(line)
 
-    row("Execution Accuracy",  a_exec,  b_exec if has_baseline else None)
-    row("Result Accuracy",     a_res,   b_res  if has_baseline else None)
+    row("Execution Accuracy", a_exec, b_exec if has_baseline else None)
+    row("Result Accuracy", a_res, b_res if has_baseline else None)
 
-    # Per-tier breakdown (agent only)
     print()
     print("  Per-Tier Result Accuracy (Agent):")
     for tier in (1, 2, 3):
@@ -293,85 +211,79 @@ def _print_summary(agent_rows: List[Dict], baseline_rows: Optional[List[Dict]]) 
             bar = "█" * int(acc * 10) + "░" * (10 - int(acc * 10))
             print(f"    Tier {tier}  {bar}  {acc:.0%}  ({len(tier_rows)} questions)")
 
-    # Failure details
     failures = [r for r in agent_rows if not r["result_match"]]
     if failures:
         print()
         print("  Failure analysis (Agent):")
         for f in failures:
-            if not f["exec_success"]:
-                reason = f"EXEC ERROR — {f['error']}"
-            else:
-                reason = "WRONG RESULT — SQL executed but data didn't match"
+            reason = f"EXEC ERROR — {f['error']}" if not f["exec_success"] else "WRONG RESULT"
             print(f"    [{f['id']}] Tier {f['tier']}: {reason[:70]}")
     else:
         print()
-        print("  No failures — all questions answered correctly.")
+        print("  No failures — 100% of questions answered correctly!")
 
     print("=" * width)
     print()
 
 
-# ─── Public API ───────────────────────────────────────────────────────────────
-
 def run_eval(
-    questions_path: str = "data/dev_questions_with_answers.json",
+    dataset: str = "dev",
+    db_path: str = "data/Chinook.db",
     run_baseline: bool = True,
     output_path: Optional[str] = None,
     verbose: bool = True,
 ) -> Dict:
-    """
-    Run the full evaluation suite.
-
-    Args:
-        questions_path: Path to the dev_questions_with_answers.json file.
-        run_baseline:   If True, also evaluate the baseline prompt.
-        output_path:    If set, write detailed JSON results to this file.
-        verbose:        If True, print per-question progress and summary.
-
-    Returns:
-        dict with keys:
-          agent     – {execution_accuracy, result_accuracy, details}
-          baseline  – same structure, or None if run_baseline=False
-    """
-    conn  = load_db()
+    conn = load_db(db_path)
     agent = TextToSQLAgent(conn)
 
     baseline_client = None
     if run_baseline:
-        baseline_client = agent.client
+        client_kwargs = {}
+        if agent.api_key:
+            client_kwargs["api_key"] = agent.api_key
+        if agent.base_url:
+            client_kwargs["base_url"] = agent.base_url
+        baseline_client = OpenAI(**client_kwargs)
 
-    with open(questions_path) as fh:
-        questions = json.load(fh)
+    questions: List[Dict] = []
+    base_dir = Path(__file__).resolve().parent.parent
+
+    if dataset in ("dev", "all"):
+        dev_file = base_dir / "data" / "dev_questions_with_answers.json"
+        if dev_file.exists():
+            with open(dev_file) as fh:
+                questions.extend(json.load(fh))
+
+    if dataset in ("extended", "all"):
+        ext_file = base_dir / "data" / "extended_questions_with_answers.json"
+        if ext_file.exists():
+            with open(ext_file) as fh:
+                questions.extend(json.load(fh))
 
     if verbose:
-        print(f"\nRunning evaluation on {len(questions)} questions")
+        print(f"\nRunning evaluation on {len(questions)} questions (dataset={dataset})")
         print(f"  Agent model : {agent.model}")
-        print(f"  Baseline    : {'enabled (same model, no schema)' if run_baseline else 'disabled'}")
-        print()
+        print(f"  Baseline    : {'enabled' if run_baseline else 'disabled'}\n")
 
-    agent_rows: List[Dict]    = []
+    agent_rows: List[Dict] = []
     baseline_rows: List[Dict] = []
 
     for q in questions:
         if verbose:
-            tier_label = f"[Tier {q['tier']}]"
+            tier_label = f"[Tier {q.get('tier', 1)}]"
             print(f"  {q['id']} {tier_label:<8} {q['question'][:55]}...")
 
         one = _eval_one(q, agent, baseline_client, conn)
-
         agent_rows.append(one["agent"])
 
-        a = one["agent"]
         if verbose:
-            a_sym = "✓" if a["result_match"] else ("⚡" if not a["exec_success"] else "✗")
+            a_sym = "✓" if one["agent"]["result_match"] else ("⚡" if not one["agent"]["exec_success"] else "✗")
             print(f"           Agent: {a_sym}", end="")
 
         if one["baseline"] is not None:
             baseline_rows.append(one["baseline"])
-            b = one["baseline"]
             if verbose:
-                b_sym = "✓" if b["result_match"] else ("⚡" if not b["exec_success"] else "✗")
+                b_sym = "✓" if one["baseline"]["result_match"] else ("⚡" if not one["baseline"]["exec_success"] else "✗")
                 print(f"  Baseline: {b_sym}", end="")
 
         if verbose:
@@ -379,14 +291,16 @@ def run_eval(
 
     n = len(questions)
     metrics = {
+        "dataset": dataset,
+        "total_questions": n,
         "agent": {
-            "execution_accuracy": sum(r["exec_success"] for r in agent_rows) / n,
-            "result_accuracy":    sum(r["result_match"] for r in agent_rows) / n,
+            "execution_accuracy": sum(r["exec_success"] for r in agent_rows) / n if n > 0 else 0,
+            "result_accuracy": sum(r["result_match"] for r in agent_rows) / n if n > 0 else 0,
             "details": agent_rows,
         },
         "baseline": {
-            "execution_accuracy": sum(r["exec_success"] for r in baseline_rows) / n,
-            "result_accuracy":    sum(r["result_match"] for r in baseline_rows) / n,
+            "execution_accuracy": sum(r["exec_success"] for r in baseline_rows) / n if n > 0 else 0,
+            "result_accuracy": sum(r["result_match"] for r in baseline_rows) / n if n > 0 else 0,
             "details": baseline_rows,
         } if baseline_rows else None,
     }
@@ -403,14 +317,23 @@ def run_eval(
     return metrics
 
 
-# ─── CLI entry point ──────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run text-to-SQL evaluation")
     parser.add_argument(
+        "--dataset",
+        choices=["dev", "extended", "all"],
+        default="dev",
+        help="Dataset to evaluate against (dev, extended, all)",
+    )
+    parser.add_argument(
+        "--db",
+        default="data/Chinook.db",
+        help="Path to SQLite database file",
+    )
+    parser.add_argument(
         "--no-baseline",
         action="store_true",
-        help="Skip the baseline prompt evaluation (saves API calls)",
+        help="Skip baseline evaluation",
     )
     parser.add_argument(
         "--output",
@@ -421,6 +344,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_eval(
+        dataset=args.dataset,
+        db_path=args.db,
         run_baseline=not args.no_baseline,
         output_path=args.output,
     )

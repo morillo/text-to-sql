@@ -1,58 +1,48 @@
-"""CLI entry point.
+"""Interactive Terminal CLI for Model-Agnostic Text-to-SQL Agent.
 
-Run with:
+Run:
     python -m src.cli
+    python -m src.cli --db custom.db
+    python -m src.cli --model gpt-4o-mini
+    python -m src.cli --no-stream
 
-The CLI launches an interactive terminal session where you can:
-  - Type a natural language question and get back the generated SQL + results
-  - Ask follow-up questions to refine or explore further (context is preserved)
-  - Type 'reset'  to clear conversation history and start fresh
-  - Type 'schema' to print the full database schema
-  - Type 'exit' or 'quit' (or press Ctrl-C) to end the session
-
-Environment variables required:
-    LLM_API_KEY         Your LLM provider API key
+Features:
+  - Query any SQLite database using natural language from the terminal.
+  - Works with OpenAI, Google Gemini, DeepSeek, local Ollama, or custom endpoints.
+  - Real-time token streaming for perceived latency < 1.0 second.
+  - Formatted ASCII table result output.
+  - Export query results to CSV (`export <filename.csv>`).
+  - View database schema (`schema`).
+  - Multi-turn conversation memory (`reset` to clear).
 """
 
+import argparse
+import csv
 import os
 import sys
+import time
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# Allow running as  python -m src.cli  from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.agent import TextToSQLAgent
+from src.agent import TextToSQLAgent, DEFAULT_MODEL
 from src.utils import load_db, print_table_schema
 
 
-# ─── Display helpers ──────────────────────────────────────────────────────────
-
-def _format_results_table(results: list) -> str:
-    """
-    Render a list-of-dicts as a fixed-width ASCII table.
-
-    We avoid third-party libraries (tabulate, rich) so the CLI works
-    with only the dependencies already in pyproject.toml.
-
-    Args:
-        results: List of row dicts returned by query_db().
-
-    Returns:
-        A multi-line string ready for print().
-    """
+def _format_results_table(results: List[Dict[str, Any]]) -> str:
+    """Render row dicts as a clean ASCII table."""
     if not results:
         return "  (no rows returned)"
 
     cols = list(results[0].keys())
-
-    # Compute the width needed for each column (header or widest value)
     widths = {col: len(col) for col in cols}
     for row in results:
         for col in cols:
             widths[col] = max(widths[col], len(str(row.get(col, ""))))
 
-    sep   = "  " + "  ".join("-" * widths[c] for c in cols)
-    hdr   = "  " + "  ".join(col.ljust(widths[col]) for col in cols)
+    sep = "  " + "  ".join("-" * widths[c] for c in cols)
+    hdr = "  " + "  ".join(col.ljust(widths[col]) for col in cols)
     lines = [sep, hdr, sep]
 
     for row in results:
@@ -65,56 +55,62 @@ def _format_results_table(results: list) -> str:
     return "\n".join(lines)
 
 
-def _print_banner(agent: TextToSQLAgent) -> None:
-    provider_name = "Gemini" if "generativelanguage" in getattr(agent, "base_url", "") or "gemini" in getattr(agent, "provider", "") else ("OpenAI-Compatible" if getattr(agent, "base_url", "") else "OpenAI")
+def _print_banner(db_path: str, model: str, streaming: bool) -> None:
     print()
-    print("=" * 62)
-    print("  Text-to-SQL CLI")
-    print(f"  Model: {agent.model} ({provider_name})")
-    print("  Database: Chinook Music Store (SQLite)")
-    print("=" * 62)
+    print("=" * 66)
+    print("  Model-Agnostic  ·  Text-to-SQL CLI Agent")
+    print(f"  Model    : {model}")
+    print(f"  Database : {db_path}")
+    print(f"  Mode     : {'Real-Time Token Streaming' if streaming else 'Standard Response'}")
+    print("=" * 66)
     print("  Commands:")
-    print("    <question>  Ask anything about the database")
-    print("    reset       Clear conversation history")
-    print("    schema      Show full database schema")
-    print("    exit/quit   End the session")
-    print("=" * 62)
+    print("    <question>        Ask natural language questions")
+    print("    schema            View database schema")
+    print("    export <file.csv> Export last query results to CSV")
+    print("    reset             Clear conversation history")
+    print("    exit / quit       End session")
+    print("=" * 66)
     print()
 
-
-# ─── Main loop ────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Entry point — called by  python -m src.cli."""
-    import dotenv
-    dotenv.load_dotenv()
+    parser = argparse.ArgumentParser(description="Model-Agnostic Text-to-SQL CLI Agent")
+    parser.add_argument(
+        "--db",
+        default="data/Chinook.db",
+        help="Path to SQLite database file (default: data/Chinook.db)",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=f"LLM model identifier string (default: from .env or {DEFAULT_MODEL})",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable real-time token streaming",
+    )
+    args = parser.parse_args()
 
-    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print(
-            "\nError: No API key set.\n"
-            "Please create a .env file or set one of the following environment variables:\n"
-            "  - LLM_API_KEY\n"
-            "  - OPENAI_API_KEY\n"
-            "  - GEMINI_API_KEY\n"
-        )
-        sys.exit(1)
-
-    # ── Load the database ─────────────────────────────────────────────────────
     try:
-        conn = load_db()
-    except FileNotFoundError as exc:
-        print(f"\nError: {exc}\n")
+        conn = load_db(args.db)
+    except Exception as exc:
+        print(f"\nError initializing database connection: {exc}\n")
         sys.exit(1)
 
-    # ── Initialise the agent (schema is loaded once here) ────────────────────
-    print("\nLoading schema and initialising agent...", end="", flush=True)
-    agent = TextToSQLAgent(conn)
-    print(" ready.\n")
+    print("\nLoading database schema and initializing agent...", end="", flush=True)
+    try:
+        agent = TextToSQLAgent(conn, model=args.model)
+        print(" ready.\n")
+    except Exception as exc:
+        print(f"\nError initializing agent: {exc}\n")
+        sys.exit(1)
 
-    _print_banner(agent)
+    use_stream = not args.no_stream
+    _print_banner(args.db, agent.model, use_stream)
 
-    # ── Interactive loop ──────────────────────────────────────────────────────
+    last_results: List[Dict[str, Any]] = []
+
     while True:
         try:
             user_input = input("Ask a question > ").strip()
@@ -127,61 +123,74 @@ def main() -> None:
 
         cmd = user_input.lower()
 
-        # ── Built-in commands ────────────────────────────────────────────────
         if cmd in ("exit", "quit"):
             print("Goodbye!")
             break
 
         if cmd == "reset":
             agent.reset_conversation()
+            last_results = []
             print("\nConversation history cleared. Starting fresh.\n")
             continue
 
-        if cmd == "schema":
-            print_table_schema(conn)
+        if cmd == "schema" or cmd.startswith("schema "):
+            parts = user_input.split(maxsplit=1)
+            tbl = parts[1] if len(parts) > 1 else None
+            print_table_schema(conn, table_name=tbl)
             continue
 
-        # ── Generate SQL and execute ─────────────────────────────────────────
-        print("\nThinking...", end="", flush=True)
-        result = agent.query(user_input)
-        print(" done.\n")
+        if cmd.startswith("export"):
+            parts = user_input.split(maxsplit=1)
+            filename = parts[1] if len(parts) > 1 else "query_results.csv"
+            if not last_results:
+                print("  No active query results to export.\n")
+                continue
+            try:
+                with open(filename, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=list(last_results[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(last_results)
+                print(f"  Successfully exported {len(last_results)} rows to {filename}\n")
+            except Exception as e:
+                print(f"  Error exporting to CSV: {e}\n")
+            continue
 
-        # ── Error path ────────────────────────────────────────────────────────
+        print("\nThinking...", end="", flush=True)
+        t0 = time.perf_counter()
+
+        if use_stream:
+            print("\n")
+            result = agent.query_stream(user_input)
+            elapsed = time.perf_counter() - t0
+        else:
+            result = agent.query(user_input)
+            elapsed = time.perf_counter() - t0
+            print(" done.")
+
         if result["error"]:
-            attempts = result["attempts"]
             print(
-                f"  Could not produce valid SQL after {attempts} attempt(s).\n"
-                f"  Reason: {result['error']}\n"
+                f"\n  Could not generate valid SQL after {result['attempts']} attempts.\n"
+                f"  Error: {result['error']}\n"
                 "  Please try rephrasing your question.\n"
             )
             continue
 
-        # ── Happy path ────────────────────────────────────────────────────────
-        # Print the generated SQL
-        print("SQL Query:")
-        print("  " + "-" * 58)
-        # Indent each line of the SQL for readability
-        for line in result["sql"].splitlines():
-            print(f"  {line}")
-        print("  " + "-" * 58)
+        if not use_stream:
+            print("\nSQL Query:")
+            print("  " + "-" * 58)
+            for line in result["sql"].splitlines():
+                print(f"  {line}")
+            print("  " + "-" * 58)
+
+        print("\nResults:")
+        last_results = result["results"]
+        print(_format_results_table(last_results))
         print()
 
-        # Print results as a table
-        print("Results:")
-        print(_format_results_table(result["results"]))
-        print()
-
-        # Print the one-sentence explanation
         if result["explanation"]:
-            print(f"  {result['explanation']}")
-            print()
+            print(f"  Explanation: {result['explanation']}")
 
-        # Transparency: note if the agent had to self-correct
-        if result["attempts"] > 1:
-            print(
-                f"  (Note: required {result['attempts']} attempts — "
-                "first SQL failed, agent self-corrected.)\n"
-            )
+        print(f"  (Latency: {elapsed:.2f}s | Attempts: {result['attempts']})\n")
 
 
 if __name__ == "__main__":

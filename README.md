@@ -1,17 +1,21 @@
-# Model-Agnostic Text-to-SQL Agent
+# Generic Model-Agnostic Text-to-SQL Agent
 
-A clean, production-ready, and model-provider agnostic Text-to-SQL agent CLI. This tool allows users to query SQLite databases using natural language directly from their terminal, formatting results in clean ASCII tables and explaining the queries in plain English.
+A production-ready, model-agnostic Text-to-SQL agent CLI. This tool allows users to query SQLite databases using natural language directly from their terminal, formatting results in clean ASCII tables, providing real-time token streaming, and explaining the queries in plain English.
 
 ---
 
-## Features
+## Key Features
 
-* **Multi-Turn Conversation Support**: The agent retains context across queries. You can ask follow-up questions (e.g., *"show only the top 3"* or *"filter to 2021"*) without re-specifying the entire request.
-* **Full-Schema Injection**: Auto-injects database DDL structures and realistic sample rows for all tables into the prompt, reducing table and column hallucinations to near zero.
-* **Automatic Self-Correction**: Implements a self-correction retry loop. If a generated SQL query fails SQLite execution, the agent feeds the error message back to the LLM and asks it to correct itself (up to 2 retries).
-* **100% Provider Agnostic**: Can be run with OpenAI, Google Gemini, DeepSeek, local Ollama models, or any OpenAI-compatible API endpoint via simple environment variables.
-* **Evaluation Framework**: Measures Execution Accuracy (EX) and Result Accuracy (RA) against gold-standard SQL and answers.
-* **Benchmarking Tool**: Gauges model performance, latency (P50/P95), token consumption, and projected run costs.
+* **100% Provider Agnostic**: Out-of-the-box support for OpenAI (`gpt-4o`, `gpt-4o-mini`), Google Gemini, DeepSeek, local Ollama models, or any OpenAI-compatible API endpoint via standard environment variables.
+* **Real-Time Token Streaming (`query_stream`)**: Renders generated SQL tokens chunk-by-chunk in real-time, bringing perceived Time-To-First-Token (TTFT) latency under **1.0 second**.
+* **Database Agnostic (`--db`)**: Point the CLI at any arbitrary SQLite database file (`python -m src.cli --db custom.db`).
+* **Multi-Turn Conversation Memory**: Preserves context across queries. You can ask follow-up questions (e.g., *"show only the top 3"* or *"filter to 2021"*) without re-specifying the entire request.
+* **Full-Schema Injection**: Auto-injects database DDL structures and realistic sample rows for all tables into the system prompt, reducing table/column hallucinations to near zero.
+* **Self-Correcting Execution Retry Loop**: If generated SQL fails SQLite execution, the agent feeds the error message back to the LLM for automatic self-correction (up to 2 retries).
+* **Security & Read-Only Guardrails**: Enforces `PRAGMA query_only = ON;` and application-level SQL parsing to block non-SELECT / destructive statements (`DROP`, `DELETE`, `UPDATE`, `INSERT`).
+* **CSV Export (`export <file.csv>`)**: Export active query results to CSV directly from the terminal.
+* **Evaluation Framework**: Measures Execution Accuracy (EX) and Result Accuracy (RA) against gold-standard SQL and answers (`--dataset dev|extended|all`).
+* **Automated Unit Tests**: Built-in test suite (`python -m unittest tests/test_agent.py`).
 
 ---
 
@@ -33,7 +37,7 @@ A clean, production-ready, and model-provider agnostic Text-to-SQL agent CLI. Th
      ▼                       ▼                       ▼
 ┌──────────────┐      ┌──────────────┐      ┌────────────────┐
 │  Injects DDL │      │ Execs query  │      │ Queries LLM    │
-│  & Samples   │      │   & Retries  │      │ Client (via    │
+│  & Samples   │      │ & Guardrails │      │ Client (via    │
 │ (src/utils)  │      │  (SQLite3)   │      │ OpenAI SDK)    │
 └──────────────┘      └──────────────┘      └────────────────┘
 ```
@@ -43,23 +47,22 @@ A clean, production-ready, and model-provider agnostic Text-to-SQL agent CLI. Th
 ## Setup & Installation
 
 ### 1. Run Setup Script
-Execute the setup script to create a python virtual environment, install dependencies, and download the sample SQLite database (`Chinook.db`):
+Execute the setup script to create a Python virtual environment, install dependencies, and download the sample SQLite database (`Chinook.db`):
 ```bash
 ./setup.sh
 ```
 
 ### 2. Configure Environment Variables
-Copy the `.env.example` file to `.env`:
+Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```
-Open `.env` and fill in your configuration:
+Fill in your API credentials:
 
-#### Option A: OpenAI Setup
+#### Option A: OpenAI Setup (Default)
 ```env
-LLM_PROVIDER=openai
+OPENAI_API_KEY=your-openai-api-key-here
 LLM_MODEL=gpt-4o  # or gpt-4o-mini
-LLM_API_KEY=your-openai-api-key
 ```
 
 #### Option B: Google Gemini Setup (via OpenAI Compatibility Endpoint)
@@ -75,106 +78,88 @@ LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 LLM_PROVIDER=openai
 LLM_MODEL=deepseek-chat
 LLM_API_KEY=your-api-key
-LLM_BASE_URL=https://api.deepseek.com/v1  # or local/other base URL
+LLM_BASE_URL=https://api.deepseek.com/v1  # or http://localhost:11434/v1 for Ollama
 ```
 
 ---
 
 ## How to Run
 
-### Interactive CLI
+### Interactive Terminal CLI
 Launch the terminal query assistant:
 ```bash
 # 1. Activate virtual environment
 source .venv/bin/activate
 
-# 2. Run CLI
+# 2. Run CLI against sample Chinook database
 python -m src.cli
+
+# 3. Point CLI at a custom SQLite database file
+python -m src.cli --db path/to/your_database.db
 ```
 
-#### Built-in CLI Commands:
+#### In-Session CLI Commands:
 | Command | Description |
 |---|---|
-| `<your question>` | Convert question to SQL, execute it, display results, and explain. |
-| `schema` | Print the full schema structure of all tables in the database. |
-| `reset` | Clear conversation history and start a fresh session. |
-| `exit` / `quit` | End the session. |
+| `<your question>` | Convert natural language to SQL, stream response, execute query, and format ASCII results. |
+| `schema` or `schema <table>` | Print database schema structure and column definitions. |
+| `export <file.csv>` | Export active query results to a CSV file. |
+| `reset` | Clear multi-turn conversation history and start a fresh session. |
+| `exit` / `quit` | End terminal session. |
 
 ---
 
 ## Evaluations & Benchmarking
 
 ### Running Quality Evaluations
-Evaluate the agent's SQL execution and result accuracy against the 10 golden development questions:
+Evaluate the agent's Execution Accuracy (EX) and Result Accuracy (RA) against benchmark question sets:
 ```bash
-# Run agent vs schema-less baseline comparison (requires configured .env)
-python -m src.evals
+# Evaluate on public dev questions (10 questions)
+python -m src.evals --dataset dev
 
-# Run agent evaluation only (skips baseline API calls)
+# Evaluate on extended edge-case questions (10 questions)
+python -m src.evals --dataset extended
+
+# Run full evaluation suite
+python -m src.evals --dataset all --output eval_results.json
+
+# Skip baseline comparison
 python -m src.evals --no-baseline
-
-# Save detailed results log to a JSON file
-python -m src.evals --output eval_results.json
 ```
 
-### Running Latency & Cost Benchmarks
-Measure system latency and API pricing metrics:
+### Running Latency & Performance Benchmarks
+Measure system latency (P50/P95/Mean) and token consumption metrics:
 ```bash
-# Run performance test (default: 3 iterations over 10 questions)
-python -m src.perf
+python -m src.perf --runs 3 --output perf_report.json
+```
 
-# Specify number of benchmark iterations
-python -m src.perf --runs 5
-
-# Save performance benchmark report to a JSON file
-python -m src.perf --output perf_report.json
+### Running Automated Unit Tests
+Run the built-in test suite:
+```bash
+python -m unittest tests/test_agent.py
 ```
 
 ### Re-Generating Answer Set
-Re-run the agent over all development questions and update the public answer key:
+Re-run the agent over all dev questions to update `dev_answers.json`:
 ```bash
 python scripts/generate_answers.py
 ```
-This writes `dev_answers.json` containing SQL statements and formatted data outputs to the project root.
 
 ---
 
-## Architectural Decision: Framework Redesign Analysis
+## Architectural Decision: Framework Analysis (LangChain / LangGraph vs. Vanilla Python)
 
-An analysis was conducted to determine whether to redesign this codebase using **LangChain** or **LangGraph** versus maintaining the current **Vanilla Python + OpenAI SDK** architecture.
+An architecture analysis was conducted to determine whether to rewrite this codebase using **LangChain** or **LangGraph** versus maintaining the current **Vanilla Python + OpenAI SDK** structure.
 
-### Redesign Comparison Summary
+### Comparison Summary
 
 | Criteria | Vanilla Python (Current) | LangChain | LangGraph |
 |---|---|---|---|
 | **Architecture** | Direct, imperative Python | Linear DAG chain abstractions | State machine graph loops |
-| **Dependency Bloat** | Low (only `openai` & `dotenv`) | High (large nested packages) | High (requires graph runtimes) |
-| **Self-Correction Retry Loop** | Simple `try-except` retry loops | Clumsy (cycles are hard to model in LCEL) | Native (cycles are first-class edges) |
+| **Dependency Bloat** | Low (only `openai` & `python-dotenv`) | High (large nested packages) | High (requires graph runtimes) |
+| **Self-Correction Retry Loop** | Simple `try-except` retry loops | Clumsy (cycles hard to model in LCEL) | Native (cycles are first-class edges) |
 | **Debuggability** | Trivial (normal stack traces) | Hard (complex nested trace stacks) | Medium (visual traces via LangSmith) |
 | **Latency / Execution Overhead**| Near-zero | Medium (abstraction wrappers) | Medium-High (state graph overhead) |
 
-### Pros & Cons Analysis
-
-#### 1. Current Vanilla Architecture
-* **Pros:** Highly performant with near-zero latency overhead, trivial to trace and debug using standard tools (`pdb`, prints), and has a clean, readable implementation (under 350 lines).
-* **Cons:** Memory management, token pruning, or complex routing decisions must be coded manually.
-
-#### 2. LangChain
-* **Pros:** Standardized models/vectorstores integration, pre-built SQL helper classes.
-* **Cons:** Rigid linear pipelines that make recursive error-retries clumsy. Heavy dependencies can cause package conflicts.
-
-#### 3. LangGraph
-* **Pros:** Native, clean representation of the cyclic generation-verification-correction loop. Centralized type-safe state tracking. Supports human-in-the-loop validation (pausing/resuming graphs).
-* **Cons:** Significant boilerplate code (declaring graphs, nodes, edges, state schemas) which is overkill for a simple single-database agent.
-
-### Current Verdict & recommendation
-
-> [!IMPORTANT]
-> **We recommend keeping the current Vanilla Python architecture.**
-> For the current scope (a single-database agent with basic query generation, a simple multi-turn context, and a 2-attempt execution retry loop), the simplicity, minimal latency, and zero dependency overhead of the custom vanilla Python agent vastly outweigh the benefits of LangChain or LangGraph.
-
-### When should you migrate to LangGraph?
-You should consider migrating the agent to **LangGraph** only if:
-1. **Multi-DB Scale**: You need to dynamically route queries across dozens of database connections based on semantic schema lookup (RAG).
-2. **Human-in-the-loop**: You require developers/admins to review and manually edit or approve generated SQL queries before executing them.
-3. **Multi-Agent Collaboration**: The workflow expands to multiple cooperative agents (e.g. an SQL generator, a security auditor, and an execution supervisor agent).
+### Recommendation
+**We recommend keeping the current Vanilla Python architecture.** For single/multi-database querying with structured JSON parsing, real-time streaming, and a self-correcting retry loop, the simplicity, minimal latency, and zero dependency bloat of vanilla Python vastly outweigh the overhead of LangChain or LangGraph.

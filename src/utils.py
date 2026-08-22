@@ -1,23 +1,20 @@
 import re
 import sqlite3
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import pandas as pd
 
 
-def load_db(db_path: str = "data/Chinook.db") -> sqlite3.Connection:
+def load_db(db_path: str = "data/Chinook.db", read_only: bool = True) -> sqlite3.Connection:
     """
-    Load the SQLite database and return a connection.
+    Load the SQLite database and return an active connection.
 
     Args:
-        db_path: Path to the SQLite database file. Defaults to "data/Chinook.db"
+        db_path: Path to the SQLite database file. Defaults to "data/Chinook.db".
+        read_only: If True, enforces PRAGMA query_only = ON to guard against destructive mutations.
 
     Returns:
-        sqlite3.Connection: Active database connection
-
-    Raises:
-        FileNotFoundError: If the database file doesn't exist
-        sqlite3.Error: If there's an error connecting to the database
+        sqlite3.Connection: Active database connection.
     """
     db_file = Path(db_path)
     if not db_file.exists():
@@ -29,10 +26,42 @@ def load_db(db_path: str = "data/Chinook.db") -> sqlite3.Connection:
     try:
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA foreign_keys = ON")
+        if read_only:
+            try:
+                conn.execute("PRAGMA query_only = ON")
+            except sqlite3.Error:
+                pass  # Fall back gracefully if unsupported by older SQLite build
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
         raise sqlite3.Error(f"Error connecting to database: {e}")
+
+
+def validate_sql_safety(sql: str) -> Tuple[bool, Optional[str]]:
+    """
+    Guardrail: Validate that generated SQL is strictly a read-only query.
+
+    Blocks destructive statements (DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE, ATTACH).
+
+    Args:
+        sql: Generated SQL query string.
+
+    Returns:
+        Tuple[bool, Optional[str]]: (is_safe, error_message)
+    """
+    cleaned = sql.strip().upper()
+
+    # Block statements that do not start with SELECT or WITH
+    if not (cleaned.startswith("SELECT") or cleaned.startswith("WITH")):
+        return False, "Security Violation: Only read-only SELECT or WITH statements are allowed."
+
+    # Check for forbidden keywords as standalone tokens
+    forbidden_tokens = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "ATTACH", "DETACH", "PRAGMA"]
+    for token in forbidden_tokens:
+        if re.search(r"\b" + token + r"\b", cleaned):
+            return False, f"Security Violation: Prohibited statement keyword '{token}' detected in query."
+
+    return True, None
 
 
 def query_db(
@@ -40,22 +69,26 @@ def query_db(
     query: str,
     params: Optional[tuple] = None,
     return_as_df: bool = True,
+    enforce_safety: bool = True,
 ) -> List[Dict[str, Any]] | pd.DataFrame:
     """
-    Execute a SQL query and return results as a pandas DataFrame or list of dictionaries.
+    Execute a SQL query and return results.
 
     Args:
-        conn: Active SQLite database connection
-        query: SQL query string to execute
-        params: Optional tuple of parameters for parameterized queries
-        return_as_df: If True, return pandas DataFrame; if False, return list of dicts
+        conn: Active SQLite database connection.
+        query: SQL query string to execute.
+        params: Optional tuple of parameters.
+        return_as_df: If True, return pandas DataFrame; if False, return list of dicts.
+        enforce_safety: If True, validates SQL safety before execution.
 
     Returns:
-        pd.DataFrame or List[Dict[str, Any]]: Query results
-
-    Raises:
-        sqlite3.Error: If there's an error executing the query
+        pd.DataFrame or List[Dict[str, Any]]: Query results.
     """
+    if enforce_safety:
+        is_safe, err_msg = validate_sql_safety(query)
+        if not is_safe:
+            raise sqlite3.Error(err_msg)
+
     try:
         if return_as_df:
             return pd.read_sql_query(query, conn, params=params)
@@ -76,41 +109,24 @@ def query_db(
 
 
 def get_schema(conn: sqlite3.Connection) -> Dict[str, List[Dict[str, str]]]:
-    """
-    Get the database schema including all tables and their columns.
-
-    Args:
-        conn: Active SQLite database connection
-
-    Returns:
-        Dict[str, List[Dict[str, str]]]: Dictionary mapping table names to their column info
-    """
+    """Get the database schema including all tables and column information."""
     schema = {}
-
     tables = query_db(
         conn,
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
         return_as_df=False,
     )
-
     for table in tables:
         table_name = table["name"]
         columns = query_db(conn, f"PRAGMA table_info({table_name})", return_as_df=False)
         schema[table_name] = columns
-
     return schema
 
 
 def print_table_schema(
     conn: sqlite3.Connection, table_name: Optional[str] = None
 ) -> None:
-    """
-    Print a formatted view of the database schema.
-
-    Args:
-        conn: Active SQLite database connection
-        table_name: Optional specific table name to display. If None, shows all tables.
-    """
+    """Print formatted database schema."""
     schema = get_schema(conn)
 
     if table_name:
@@ -151,22 +167,8 @@ def print_table_schema(
 
 
 def get_schema_string(conn: sqlite3.Connection) -> str:
-    """
-    Build a comprehensive schema string for LLM prompt injection.
-
-    Combines the raw DDL (CREATE TABLE statements) for every table with
-    two sample rows per table so the model understands column names, data
-    types, foreign-key relationships, and realistic data formats.
-
-    Args:
-        conn: Active SQLite database connection
-
-    Returns:
-        str: Multi-line schema description ready to paste into a system prompt
-    """
+    """Build schema DDL + sample rows string for LLM prompt injection."""
     parts = []
-
-    # Fetch every user-created table (exclude SQLite internals)
     tables = query_db(
         conn,
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -175,8 +177,6 @@ def get_schema_string(conn: sqlite3.Connection) -> str:
 
     for table in tables:
         table_name = table["name"]
-
-        # ── DDL ──────────────────────────────────────────────────────────────
         ddl_rows = query_db(
             conn,
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
@@ -186,7 +186,6 @@ def get_schema_string(conn: sqlite3.Connection) -> str:
         if ddl_rows and ddl_rows[0]["sql"]:
             parts.append(ddl_rows[0]["sql"].strip() + ";")
 
-        # ── Sample rows (2 rows so the model sees real value formats) ────────
         try:
             rows = query_db(conn, f"SELECT * FROM [{table_name}] LIMIT 2", return_as_df=False)
             if rows:
@@ -197,44 +196,23 @@ def get_schema_string(conn: sqlite3.Connection) -> str:
                     values = ", ".join(str(v) for v in row.values())
                     parts.append(f"--   {values}")
         except sqlite3.Error:
-            pass  # Skip sample rows if the table can't be read
+            pass
 
-        parts.append("")  # Blank line between tables for readability
+        parts.append("")
 
     return "\n".join(parts)
 
 
 def extract_sql(text: str) -> str:
-    """
-    Robustly extract a SQL statement from model output.
-
-    Handles three common formats the model might return:
-      1. Fenced SQL block:  ```sql SELECT ... ```
-      2. Generic code fence: ``` SELECT ... ```
-      3. Plain text containing a SELECT/WITH statement
-
-    Args:
-        text: Raw string returned by the language model
-
-    Returns:
-        str: The extracted SQL statement, stripped of surrounding whitespace
-    """
+    """Extract SQL from free-form model output string."""
     text = text.strip()
-
-    # ── Case 1: ```sql ... ``` ────────────────────────────────────────────────
     m = re.search(r"```sql\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
     if m:
         return m.group(1).strip()
-
-    # ── Case 2: ``` ... ``` ──────────────────────────────────────────────────
     m = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
     if m:
         return m.group(1).strip()
-
-    # ── Case 3: find the first SELECT or WITH keyword ────────────────────────
     m = re.search(r"((?:SELECT|WITH)\s+.+?)(?:;|\Z)", text, re.IGNORECASE | re.DOTALL)
     if m:
         return m.group(1).strip()
-
-    # Fall back: return the raw text and let the caller handle the error
     return text.strip()

@@ -1,0 +1,257 @@
+[
+  {
+    "id": "ext_001",
+    "question": "What are the top 5 countries with the highest total invoice sales?",
+    "tier": 1,
+    "gold_sql": "SELECT BillingCountry, SUM(Total) as TotalSales FROM Invoice GROUP BY BillingCountry ORDER BY TotalSales DESC LIMIT 5",
+    "gold_answer": "USA ($523.06), Canada ($303.96), France ($195.10), Brazil ($190.10), Germany ($156.48)",
+    "expected_result": [
+      {
+        "BillingCountry": "USA",
+        "TotalSales": 523.06
+      },
+      {
+        "BillingCountry": "Canada",
+        "TotalSales": 303.96
+      },
+      {
+        "BillingCountry": "France",
+        "TotalSales": 195.1
+      },
+      {
+        "BillingCountry": "Brazil",
+        "TotalSales": 190.1
+      },
+      {
+        "BillingCountry": "Germany",
+        "TotalSales": 156.48
+      }
+    ]
+  },
+  {
+    "id": "ext_002",
+    "question": "Find all customers who have made purchases totaling over $40.",
+    "tier": 2,
+    "gold_sql": "SELECT c.FirstName || ' ' || c.LastName as CustomerName, SUM(i.Total) as TotalSpent FROM Customer c JOIN Invoice i ON c.CustomerId = i.CustomerId GROUP BY c.CustomerId HAVING TotalSpent > 40 ORDER BY TotalSpent DESC",
+    "gold_answer": "Helena Holý ($49.62), Richard Cunningham ($47.62), Luis Rojas ($46.62), Ladislav Kovács ($45.62), Hugh O'Reilly ($45.62), Manny López ($40.62), Julia Barnett ($40.62)",
+    "expected_result": [
+      {
+        "CustomerName": "Helena Holý",
+        "TotalSpent": 49.62
+      },
+      {
+        "CustomerName": "Richard Cunningham",
+        "TotalSpent": 47.62
+      },
+      {
+        "CustomerName": "Luis Rojas",
+        "TotalSpent": 46.62
+      },
+      {
+        "CustomerName": "Ladislav Kovács",
+        "TotalSpent": 45.62
+      },
+      {
+        "CustomerName": "Hugh O'Reilly",
+        "TotalSpent": 45.62
+      },
+      {
+        "CustomerName": "Manny López",
+        "TotalSpent": 40.62
+      },
+      {
+        "CustomerName": "Julia Barnett",
+        "TotalSpent": 40.62
+      }
+    ]
+  },
+  {
+    "id": "ext_003",
+    "question": "Which 3 artists have the most total albums in the database?",
+    "tier": 1,
+    "gold_sql": "SELECT ar.Name, COUNT(al.AlbumId) as AlbumCount FROM Artist ar JOIN Album al ON ar.ArtistId = al.ArtistId GROUP BY ar.ArtistId, ar.Name ORDER BY AlbumCount DESC LIMIT 3",
+    "gold_answer": "Iron Maiden (21), Led Zeppelin (14), Deep Purple (11)",
+    "expected_result": [
+      {
+        "Name": "Iron Maiden",
+        "AlbumCount": 21
+      },
+      {
+        "Name": "Led Zeppelin",
+        "AlbumCount": 14
+      },
+      {
+        "Name": "Deep Purple",
+        "AlbumCount": 11
+      }
+    ]
+  },
+  {
+    "id": "ext_004",
+    "question": "List the top 5 tracks with the longest duration in milliseconds.",
+    "tier": 1,
+    "gold_sql": "SELECT Name, Milliseconds FROM Track ORDER BY Milliseconds DESC LIMIT 5",
+    "gold_answer": "Occupation / Precipice (5286953), Through a Looking Glass (5088838), Battlespace (4995416), Harold (4804104), Greetings from Earth (4654924)",
+    "expected_result": [
+      {
+        "Name": "Occupation / Precipice",
+        "Milliseconds": 5286953
+      },
+      {
+        "Name": "Through a Looking Glass",
+        "Milliseconds": 5088838
+      },
+      {
+        "Name": "Battlespace",
+        "Milliseconds": 4995416
+      },
+      {
+        "Name": "Harold",
+        "Milliseconds": 4804104
+      },
+      {
+        "Name": "Greetings from Earth",
+        "Milliseconds": 4654924
+      }
+    ]
+  },
+  {
+    "id": "ext_005",
+    "question": "What is the total spending of customer Frank Harris?",
+    "tier": 2,
+    "gold_sql": "SELECT c.FirstName || ' ' || c.LastName as CustomerName, SUM(i.Total) as TotalSpent FROM Customer c JOIN Invoice i ON c.CustomerId = i.CustomerId WHERE c.FirstName = 'Frank' AND c.LastName = 'Harris' GROUP BY c.CustomerId",
+    "gold_answer": "Frank Harris ($37.62)",
+    "expected_result": [
+      {
+        "CustomerName": "Frank Harris",
+        "TotalSpent": 37.62
+      }
+    ]
+  },
+  {
+    "id": "ext_006",
+    "question": "Find the total revenue generated in each month of the year 2021.",
+    "tier": 2,
+    "gold_sql": "SELECT strftime('%m', InvoiceDate) as Month, SUM(Total) as TotalRevenue FROM Invoice WHERE strftime('%Y', InvoiceDate) = '2021' GROUP BY Month ORDER BY Month",
+    "gold_answer": "01 ($37.62), 02 ($37.62), 03 ($37.62), 04 ($37.62), 05 ($37.62), 06 ($37.62), 07 ($37.62), 08 ($37.62), 09 ($37.62), 10 ($37.62), 11 ($37.62), 12 ($35.64)",
+    "expected_result": [
+      {
+        "Month": "01",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "02",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "03",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "04",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "05",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "06",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "07",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "08",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "09",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "10",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "11",
+        "TotalRevenue": 37.62
+      },
+      {
+        "Month": "12",
+        "TotalRevenue": 35.64
+      }
+    ]
+  },
+  {
+    "id": "ext_007",
+    "question": "Which employee supported the customer who spent the highest total amount?",
+    "tier": 3,
+    "gold_sql": "SELECT e.FirstName || ' ' || e.LastName as EmployeeName, c.FirstName || ' ' || c.LastName as CustomerName, SUM(i.Total) as TotalSpent FROM Employee e JOIN Customer c ON e.EmployeeId = c.SupportRepId JOIN Invoice i ON c.CustomerId = i.CustomerId GROUP BY c.CustomerId ORDER BY TotalSpent DESC LIMIT 1",
+    "gold_answer": "Margaret Park (supported Helena Holý who spent $49.62)",
+    "expected_result": [
+      {
+        "EmployeeName": "Margaret Park",
+        "CustomerName": "Helena Holý",
+        "TotalSpent": 49.62
+      }
+    ]
+  },
+  {
+    "id": "ext_008",
+    "question": "How many tracks have never been purchased?",
+    "tier": 3,
+    "gold_sql": "SELECT COUNT(t.TrackId) as UnpurchasedTracks FROM Track t LEFT JOIN InvoiceLine il ON t.TrackId = il.TrackId WHERE il.InvoiceLineId IS NULL",
+    "gold_answer": "1519 tracks",
+    "expected_result": [
+      {
+        "UnpurchasedTracks": 1519
+      }
+    ]
+  },
+  {
+    "id": "ext_009",
+    "question": "Find all genres that have more than 100 tracks.",
+    "tier": 2,
+    "gold_sql": "SELECT g.Name, COUNT(t.TrackId) as TrackCount FROM Genre g JOIN Track t ON g.GenreId = t.GenreId GROUP BY g.GenreId, g.Name HAVING TrackCount > 100 ORDER BY TrackCount DESC",
+    "gold_answer": "Rock (1297), Latin (579), Metal (374), Alternative & Punk (332), Jazz (130)",
+    "expected_result": [
+      {
+        "Name": "Rock",
+        "TrackCount": 1297
+      },
+      {
+        "Name": "Latin",
+        "TrackCount": 579
+      },
+      {
+        "Name": "Metal",
+        "TrackCount": 374
+      },
+      {
+        "Name": "Alternative & Punk",
+        "TrackCount": 332
+      },
+      {
+        "Name": "Jazz",
+        "TrackCount": 130
+      }
+    ]
+  },
+  {
+    "id": "ext_010",
+    "question": "What is the total sales count for tracks by the artist Queen?",
+    "tier": 2,
+    "gold_sql": "SELECT ar.Name, SUM(il.Quantity) as TotalQuantity, SUM(il.UnitPrice * il.Quantity) as TotalRevenue FROM Artist ar JOIN Album al ON ar.ArtistId = al.ArtistId JOIN Track t ON al.AlbumId = t.AlbumId JOIN InvoiceLine il ON t.TrackId = il.TrackId WHERE ar.Name = 'Queen' GROUP BY ar.ArtistId, ar.Name",
+    "gold_answer": "Queen (37 tracks sold, $36.63 total revenue)",
+    "expected_result": [
+      {
+        "Name": "Queen",
+        "TotalQuantity": 37,
+        "TotalRevenue": 36.63
+      }
+    ]
+  }
+]
