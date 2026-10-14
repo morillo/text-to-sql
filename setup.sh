@@ -15,9 +15,7 @@ fi
 
 # Create virtual environment and install dependencies
 echo "Creating virtual environment and installing dependencies..."
-uv venv
-source .venv/bin/activate
-uv pip install -e .
+uv sync
 
 # Download the Chinook database
 echo ""
@@ -42,7 +40,6 @@ echo ""
 echo "Setup complete!"
 echo ""
 echo "To get started:"
-echo "  1. Activate the virtual environment: source .venv/bin/activate"
-echo "  2. Create a .env file from .env.example and set your API key"
-echo "  3. Start querying your database: python -m src.cli"
+echo "  1. Create a .env file from .env.example and set your API key"
+echo "  2. Start querying your database: uv run python -m src.cli"
 echo ""
