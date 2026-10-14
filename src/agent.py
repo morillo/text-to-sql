@@ -42,6 +42,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI, RateLimitError, APIError
+from openai.types.chat import ChatCompletionMessageParam
 
 from src.utils import get_schema_string, query_db
 
@@ -144,7 +145,7 @@ class TextToSQLAgent:
         self.provider = os.environ.get("LLM_PROVIDER", "").lower()
         self.api_key = os.environ.get("LLM_API_KEY")
         self.base_url = os.environ.get("LLM_BASE_URL")
-        self.model = model or os.environ.get("LLM_MODEL")
+        self.model: str = model or os.environ.get("LLM_MODEL") or DEFAULT_MODEL
 
         if not self.api_key:
             self.api_key = (
@@ -152,9 +153,6 @@ class TextToSQLAgent:
                 or os.environ.get("GEMINI_API_KEY")
                 or os.environ.get("DEEPSEEK_API_KEY")
             )
-
-        if not self.model:
-            self.model = DEFAULT_MODEL
 
         if self.api_key and self.api_key.startswith("AIzaSy") and not self.base_url:
             self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -177,7 +175,7 @@ class TextToSQLAgent:
         self.system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
             schema=self.schema_string
         )
-        self.conversation_history: List[Dict[str, str]] = []
+        self.conversation_history: List[ChatCompletionMessageParam] = []
 
     def reset_conversation(self) -> None:
         """Clear conversation history to start a fresh session."""
@@ -195,9 +193,10 @@ class TextToSQLAgent:
             {"role": "user", "content": user_question}
         )
 
-        messages = [
-            {"role": "system", "content": self.system_prompt}
-        ] + self.conversation_history
+        messages: List[ChatCompletionMessageParam] = [
+            {"role": "system", "content": self.system_prompt},
+            *self.conversation_history,
+        ]
 
         last_error: Optional[str] = None
         sql: Optional[str] = None
@@ -205,7 +204,8 @@ class TextToSQLAgent:
 
         for attempt in range(max_retries + 1):
             if attempt > 0 and last_error and sql:
-                retry_messages = messages + [
+                retry_messages: List[ChatCompletionMessageParam] = [
+                    *messages,
                     {
                         "role": "assistant",
                         "content": json.dumps({"sql": sql, "explanation": ""}),
@@ -296,9 +296,10 @@ class TextToSQLAgent:
         Stream response tokens in real-time to lower perceived latency (TTFT < 1.0s).
         """
         self.conversation_history.append({"role": "user", "content": user_question})
-        messages = [
-            {"role": "system", "content": self.system_prompt}
-        ] + self.conversation_history
+        messages: List[ChatCompletionMessageParam] = [
+            {"role": "system", "content": self.system_prompt},
+            *self.conversation_history,
+        ]
 
         try:
             stream = self.client.chat.completions.create(
