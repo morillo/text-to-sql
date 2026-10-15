@@ -8,3 +8,8 @@ dependencies = ["openai", "ipython", "pandas", "pydantic", "python-dotenv"]
 [tool.uv]
 # Not a distributable package: `uv sync` installs the dependencies only.
 package = false
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+]

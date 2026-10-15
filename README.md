@@ -52,6 +52,8 @@ Setup: `uv sync` (uv installs the pinned Python from `.python-version` and the l
 ./setup.sh
 ```
 
+Type check: `uv run pyright` (the same checks VS Code's Pylance shows). CI runs it on every pull request.
+
 ### 2. Configure Environment Variables
 Copy `.env.example` to `.env`:
 ```bash

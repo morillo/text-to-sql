@@ -175,8 +175,10 @@ def _print_summary(agent_rows: List[Dict], baseline_rows: Optional[List[Dict]]) 
     a_exec = sum(r["exec_success"] for r in agent_rows) / n
     a_res = sum(r["result_match"] for r in agent_rows) / n
 
-    has_baseline = baseline_rows is not None and len(baseline_rows) > 0
-    if has_baseline:
+    has_baseline = bool(baseline_rows)
+    b_exec: Optional[float] = None
+    b_res: Optional[float] = None
+    if baseline_rows:
         b_exec = sum(r["exec_success"] for r in baseline_rows) / n
         b_res = sum(r["result_match"] for r in baseline_rows) / n
 
@@ -199,8 +201,8 @@ def _print_summary(agent_rows: List[Dict], baseline_rows: Optional[List[Dict]]) 
             line += f"  {b_val:>7.1%}  {delta:>+6.1%}"
         print(line)
 
-    row("Execution Accuracy", a_exec, b_exec if has_baseline else None)
-    row("Result Accuracy", a_res, b_res if has_baseline else None)
+    row("Execution Accuracy", a_exec, b_exec)
+    row("Result Accuracy", a_res, b_res)
 
     print()
     print("  Per-Tier Result Accuracy (Agent):")

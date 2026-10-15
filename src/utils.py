@@ -1,6 +1,6 @@
 import re
 import sqlite3
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Literal, Optional, Tuple, overload
 from pathlib import Path
 import pandas as pd
 
@@ -64,6 +64,31 @@ def validate_sql_safety(sql: str) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+@overload
+def query_db(
+    conn: sqlite3.Connection,
+    query: str,
+    params: Optional[tuple] = None,
+    return_as_df: Literal[True] = True,
+    enforce_safety: bool = True,
+) -> pd.DataFrame: ...
+@overload
+def query_db(
+    conn: sqlite3.Connection,
+    query: str,
+    params: Optional[tuple] = None,
+    *,
+    return_as_df: Literal[False],
+    enforce_safety: bool = True,
+) -> List[Dict[str, Any]]: ...
+@overload
+def query_db(
+    conn: sqlite3.Connection,
+    query: str,
+    params: Optional[tuple] = None,
+    return_as_df: bool = True,
+    enforce_safety: bool = True,
+) -> List[Dict[str, Any]] | pd.DataFrame: ...
 def query_db(
     conn: sqlite3.Connection,
     query: str,
@@ -91,7 +116,7 @@ def query_db(
 
     try:
         if return_as_df:
-            return pd.read_sql_query(query, conn, params=params)
+            return pd.read_sql_query(query, conn, params=list(params) if params else None)
         else:
             cursor = conn.cursor()
             if params:
@@ -108,7 +133,7 @@ def query_db(
         raise sqlite3.Error(f"Error executing query: {e}")
 
 
-def get_schema(conn: sqlite3.Connection) -> Dict[str, List[Dict[str, str]]]:
+def get_schema(conn: sqlite3.Connection) -> Dict[str, List[Dict[str, Any]]]:
     """Get the database schema including all tables and column information."""
     schema = {}
     tables = query_db(

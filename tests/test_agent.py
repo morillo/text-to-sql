@@ -23,15 +23,15 @@ class TestTextToSQL(unittest.TestCase):
 
         safe, err = validate_sql_safety("DROP TABLE Customer;")
         self.assertFalse(safe)
-        self.assertIn("Security Violation", err)
+        self.assertIn("Security Violation", err or "")
 
         safe, err = validate_sql_safety("DELETE FROM Track WHERE TrackId = 1")
         self.assertFalse(safe)
-        self.assertIn("Security Violation", err)
+        self.assertIn("Security Violation", err or "")
 
         safe, err = validate_sql_safety("UPDATE Employee SET Salary = 100000")
         self.assertFalse(safe)
-        self.assertIn("Security Violation", err)
+        self.assertIn("Security Violation", err or "")
 
     def test_parse_agent_response(self):
         """Test response parser handling JSON, fenced blocks, and fallback."""
